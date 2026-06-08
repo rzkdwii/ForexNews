@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Forex News Dashboard</title>
+<style>
+  :root{
+    --bg:#0d1117; --card:#161b22; --border:#30363d;
+    --text:#e6edf3; --muted:#8b949e; --accent:#f0b90b;
+    --green:#3fb950; --red:#f85149; --blue:#58a6ff;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:-apple-system,Segoe UI,Roboto,sans-serif;padding:20px;max-width:1100px;margin:0 auto}
+  h1{font-size:22px;margin-bottom:4px}
+  .sub{color:var(--muted);font-size:13px;margin-bottom:20px}
+  .controls{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px;align-items:center}
+  input,select,button{background:var(--card);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:6px;font-size:14px}
+  input{flex:1;min-width:200px}
+  button{cursor:pointer;background:var(--accent);color:#000;font-weight:600;border:none}
+  button:hover{opacity:.9}
+  .key-box{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:18px;font-size:13px}
+  .key-box a{color:var(--blue)}
+  .filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+  .chip{background:var(--card);border:1px solid var(--border);padding:5px 12px;border-radius:20px;font-size:13px;cursor:pointer}
+  .chip.active{background:var(--accent);color:#000;border-color:var(--accent)}
+  .news{display:grid;gap:12px}
+  .item{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;display:flex;gap:14px;transition:.15s}
+  .item:hover{border-color:var(--accent)}
+  .item img{width:90px;height:90px;object-fit:cover;border-radius:8px;flex-shrink:0}
+  .item .body{flex:1;min-width:0}
+  .item h3{font-size:15px;margin-bottom:6px;line-height:1.3}
+  .item h3 a{color:var(--text);text-decoration:none}
+  .item h3 a:hover{color:var(--accent)}
+  .item p{color:var(--muted);font-size:13px;line-height:1.4;margin-bottom:8px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .meta{display:flex;gap:10px;font-size:12px;color:var(--muted);align-items:center;flex-wrap:wrap}
+  .src{color:var(--blue);font-weight:600}
+  .sent{padding:2px 8px;border-radius:4px;font-weight:600;font-size:11px}
+  .sent.pos{background:rgba(63,185,80,.15);color:var(--green)}
+  .sent.neg{background:rgba(248,81,73,.15);color:var(--red)}
+  .sent.neu{background:rgba(139,148,158,.15);color:var(--muted)}
+  .status{text-align:center;padding:40px;color:var(--muted)}
+  .err{color:var(--red)}
+</style>
+</head>
+<body>
+  <h1>📈 Forex News Dashboard</h1>
+  <div class="sub">Berita forex, gold (XAUUSD) & market — powered by Finnhub</div>
+
+  <div class="key-box" style="display:none">
+    <input id="apiKey" type="text">
+    <button onclick="saveKey()">Simpan</button>
+  </div>
+
+  <div class="controls">
+    <input id="search" type="text" placeholder="Filter judul (mis: gold, USD, fed)..." oninput="render()">
+    <button onclick="loadNews()">🔄 Muat Berita</button>
+  </div>
+
+  <div class="filters" id="catFilters">
+    <span class="chip active" data-cat="forex">Forex</span>
+    <span class="chip" data-cat="general">General</span>
+    <span class="chip" data-cat="crypto">Crypto</span>
+    <span class="chip" data-cat="merger">Merger</span>
+  </div>
+
+  <div class="news" id="news"><div class="status">Memuat berita...</div></div>
+
+<script>
+window.addEventListener('DOMContentLoaded', loadNews);
+let API_KEY = 'd8j1dt1r01qin2u15ac0d8j1dt1r01qin2u15acg';
+let category = 'forex';
+let allNews = [];
+
+function saveKey(){
+  API_KEY = document.getElementById('apiKey').value.trim();
+  if(API_KEY) loadNews();
+}
+
+document.getElementById('catFilters').addEventListener('click', e=>{
+  if(!e.target.classList.contains('chip')) return;
+  document.querySelectorAll('.chip').forEach(c=>c.classList.remove('active'));
+  e.target.classList.add('active');
+  category = e.target.dataset.cat;
+  loadNews();
+});
+
+// Sentiment sederhana berbasis keyword (Finnhub /news tidak punya sentiment)
+const POS = ['surge','rally','gain','rise','jump','bullish','strong','boost','climb','soar','beat','record high','optimism'];
+const NEG = ['fall','drop','plunge','decline','bearish','weak','slump','crash','fear','loss','cut','recession','sell-off','tumble'];
+function sentiment(text){
+  const t = text.toLowerCase();
+  let s = 0;
+  POS.forEach(w=>{ if(t.includes(w)) s++; });
+  NEG.forEach(w=>{ if(t.includes(w)) s--; });
+  return s>0?'pos':s<0?'neg':'neu';
+}
+const sentLabel = {pos:'Bullish',neg:'Bearish',neu:'Netral'};
+
+async function loadNews(){
+  if(!API_KEY){ alert('Masukkan API key dulu.'); return; }
+  const box = document.getElementById('news');
+  box.innerHTML = '<div class="status">Memuat...</div>';
+  try{
+    const url = `https://finnhub.io/api/v1/news?category=${category}&token=${API_KEY}`;
+    const res = await fetch(url);
+    if(!res.ok) throw new Error('HTTP '+res.status+' — cek API key / limit.');
+    allNews = await res.json();
+    if(!Array.isArray(allNews) || !allNews.length){ box.innerHTML='<div class="status">Tidak ada berita.</div>'; return; }
+    render();
+  }catch(err){
+    box.innerHTML = `<div class="status err">Error: ${err.message}</div>`;
+  }
+}
+
+function render(){
+  const q = document.getElementById('search').value.toLowerCase();
+  const box = document.getElementById('news');
+  const items = allNews.filter(n => (n.headline||'').toLowerCase().includes(q));
+  if(!items.length){ box.innerHTML='<div class="status">Tidak ada hasil.</div>'; return; }
+  box.innerHTML = items.map(n=>{
+    const s = sentiment((n.headline||'')+' '+(n.summary||''));
+    const date = new Date(n.datetime*1000).toLocaleString('id-ID',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
+    const img = n.image ? `<img src="${n.image}" onerror="this.style.display='none'">` : '';
+    return `<div class="item">${img}
+      <div class="body">
+        <h3><a href="${n.url}" target="_blank">${n.headline||'(tanpa judul)'}</a></h3>
+        <p>${n.summary||''}</p>
+        <div class="meta">
+          <span class="src">${n.source||''}</span>
+          <span>${date}</span>
+          <span class="sent ${s}">${sentLabel[s]}</span>
+        </div>
+      </div></div>`;
+  }).join('');
+}
+</script>
+</body>
+</html>
