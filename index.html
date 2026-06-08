@@ -73,13 +73,19 @@
 
   <div class="panel">
     <h2>📉 Candlestick + EMA <span id="chartSym" style="color:var(--muted);font-weight:400;font-size:13px"></span></h2>
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px" id="tfTabs">
-      <span class="inst tf active" data-tf="15m">15m</span>
-      <span class="inst tf" data-tf="1h">1H</span>
-      <span class="inst tf" data-tf="4h">4H</span>
-      <span class="inst tf" data-tf="1d">1D</span>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
+      <div style="display:flex;gap:6px;flex-wrap:wrap" id="tfTabs">
+        <span class="inst tf active" data-tf="15m">15m</span>
+        <span class="inst tf" data-tf="1h">1H</span>
+        <span class="inst tf" data-tf="4h">4H</span>
+        <span class="inst tf" data-tf="1d">1D</span>
+      </div>
+      <span style="flex:1"></span>
+      <input id="coinSearch" placeholder="cari crypto: ETH, SOL, DOGE..." style="max-width:220px;padding:6px 10px"
+        onkeydown="if(event.key==='Enter')doCoinSearch()">
+      <button style="padding:6px 12px" onclick="doCoinSearch()">🔍 Cari</button>
     </div>
-    <div id="chart" style="width:100%;height:360px;border-radius:8px;overflow:hidden"></div>
+    <div id="chart" style="width:100%;height:480px;border-radius:8px;overflow:hidden;border:1px solid var(--border)"></div>
     <div style="margin:8px 0;font-size:12px;color:var(--muted)">
       <span id="liveStatus">●</span> Data: Hyperliquid (gratis, tanpa key). Simbol GOLD/USA500/CL/SILVER = HIP-3 perp.
       Kalau chart kosong, simbol/dex mungkin beda — ubah di <code>COIN_ALIASES</code>.
@@ -89,7 +95,7 @@
       <span class="sent neu" id="techBias" style="font-size:14px">—</span>
       <span style="font-size:12px;color:var(--muted)" id="techNote"></span>
     </div>
-    <div style="font-size:12px;color:var(--muted);margin-top:6px">EMA20 (kuning) & EMA50 (biru). Sumber: Hyperliquid REST (historis) + WebSocket (live). Harga GOLD = perp, bukan XAUUSD spot broker.</div>
+    <div style="font-size:12px;color:var(--muted);margin-top:6px">EMA20 (kuning) & EMA50 (biru). Sumber: Hyperliquid REST + WebSocket live. XAUUSD = perp GOLD, Nasdaq = XYZ100 (perp). Bukan harga spot broker.</div>
   </div>
 
   <div class="panel">
@@ -100,7 +106,11 @@
 
   <div class="controls">
     <input id="search" type="text" placeholder="Filter judul berita..." oninput="render()">
-    <button onclick="loadNews()">🔄 Muat Ulang</button>
+    <button onclick="refreshAll()">🔄 Muat Ulang</button>
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);cursor:pointer">
+      <input type="checkbox" id="autoChk" checked onchange="toggleAuto()" style="width:auto;flex:none"> Auto-refresh
+      <span id="countdown" style="color:var(--accent);font-variant-numeric:tabular-nums"></span>
+    </label>
   </div>
   <div class="filters" id="catFilters">
     <span class="chip active" data-cat="forex">Forex</span>
@@ -112,24 +122,21 @@
 
 <script>
 const API_KEY='d8j1dt1r01qin2u15ac0d8j1dt1r01qin2u15acg';
-let category='forex', allNews=[], curInst='XAU', curTf='15m';
+let category='forex', allNews=[], biasNews=[], curInst='XAU', curTf='15m';
 
 /* Definisi instrumen: keyword identifikasi + arah safe-haven */
 const INSTRUMENTS={
-  XAU:{label:'🥇 GOLD', coin:'GOLD', match:['gold','xau','xauusd','bullion','precious metal'], havenFlip:true,
+  XAU:{label:'🥇 XAUUSD', coin:'GOLD', match:['gold','xau','xauusd','bullion','precious metal'], havenFlip:true,
        note:'Gold sering naik saat risk-off / USD lemah / dovish Fed.'},
   BTC:{label:'₿ BTC', coin:'BTC', match:['bitcoin','btc','crypto','ethereum','digital asset'], havenFlip:false,
        note:'BTC cenderung risk-on; naik saat sentimen positif / likuiditas longgar.'},
-  NDX:{label:'📊 USA500', coin:'USA500', match:['nasdaq','tech stock','equities','s&p','stock market','wall street','ndx','sp500'], havenFlip:false,
-       note:'Indeks saham risk-on; turun saat hawkish/yield naik, naik saat dovish.'},
-  OIL:{label:'🛢️ Oil (CL)', coin:'CL', match:['oil','crude','wti','brent','opec','energy'], havenFlip:false,
-       note:'Minyak dipengaruhi pasokan OPEC, permintaan global & geopolitik.'},
-  SIL:{label:'🥈 SILVER', coin:'SILVER', match:['silver','xag','precious metal'], havenFlip:true,
-       note:'Perak: logam mulia + industri; gerak mirip emas tapi lebih volatil.'},
+  NDX:{label:'📊 Nasdaq', coin:'XYZ100', match:['nasdaq','tech stock','equities','s&p','stock market','wall street','ndx','xyz100'], havenFlip:false,
+       note:'Indeks Nasdaq100 (XYZ100 di Hyperliquid); risk-on, turun saat hawkish.'},
 };
-// Daftar simbol historis Hyperliquid (HIP-3 butuh prefix dex:ticker). Sesuaikan jika nama dex berbeda.
-const COIN_ALIASES={ GOLD:['GOLD','xyz:GOLD'], USA500:['USA500','cash:USA500'], CL:['CL','xyz:CL'], SILVER:['SILVER','xyz:SILVER'], BTC:['BTC'] };
+// Alias simbol historis Hyperliquid (HIP-3 = dex:ticker). XAUUSD pakai perp GOLD.
+const COIN_ALIASES={ GOLD:['GOLD','xyz:GOLD'], XYZ100:['XYZ100','xyz:XYZ100'], BTC:['BTC'] };
 const HL_REST='https://api.hyperliquid.xyz/info';
+let searchCoin=null; // crypto hasil pencarian
 
 const POS=['surge','rally','gain','rise','jump','bullish','strong','boost','climb','soar','beat','record high','optimism','upbeat','demand','inflow'];
 const NEG=['fall','drop','plunge','decline','bearish','weak','slump','crash','fear','loss','cut','recession','sell-off','selloff','tumble','slowdown','outflow','miss'];
@@ -169,8 +176,9 @@ function buildTabs(){
 document.addEventListener('click',e=>{
   if(e.target.classList.contains('tf')){
     document.querySelectorAll('.tf').forEach(c=>c.classList.remove('active'));
-    e.target.classList.add('active'); curTf=e.target.dataset.tf; loadChart();
-  } else if(e.target.classList.contains('inst')){ curInst=e.target.dataset.inst; buildTabs(); updateBias(); loadChart(); }
+    e.target.classList.add('active'); curTf=e.target.dataset.tf;
+    if(searchCoin) doCoinSearch(); else loadChart();
+  } else if(e.target.classList.contains('inst')){ curInst=e.target.dataset.inst; searchCoin=null; document.getElementById('coinSearch').value=''; buildTabs(); updateBias(); loadChart(); }
   if(e.target.classList.contains('chip')){
     document.querySelectorAll('.chip').forEach(c=>c.classList.remove('active'));
     e.target.classList.add('active'); category=e.target.dataset.cat; loadNews();
@@ -178,7 +186,9 @@ document.addEventListener('click',e=>{
 });
 
 function updateBias(){
-  const rel=allNews.filter(n=>relevant(n,curInst));
+  if(!curInst) return;
+  const pool=biasNews.length?biasNews:allNews;
+  const rel=pool.filter(n=>relevant(n,curInst));
   let pos=0,neg=0; const dc={};
   rel.forEach(n=>{const r=scoreFor(n,curInst); if(r.label==='pos')pos++; else if(r.label==='neg')neg++;
     r.hits.forEach(([w,p])=>{dc[w]=dc[w]||{n:0,p};dc[w].n++;});});
@@ -194,8 +204,8 @@ function updateBias(){
   const top=Object.entries(dc).sort((a,b)=>b[1].n-a[1].n).slice(0,8);
   document.getElementById('drivers').innerHTML=
     `<b>${INSTRUMENTS[curInst].label}</b> — ${INSTRUMENTS[curInst].note}<br>`+
-    'Pendorong: '+(top.length?top.map(([w,o])=>`<span class="tag ${o.p}">${w} (${o.n})</span>`).join(''):'belum ada berita relevan di kategori ini')+
-    (rel.length<3?'<br><span style="color:var(--accent)">⚠ Sampel kecil — ganti kategori ke "general" atau "forex" untuk lebih banyak berita.</span>':'');
+    'Pendorong: '+(top.length?top.map(([w,o])=>`<span class="tag ${o.p}">${w} (${o.n})</span>`).join(''):'belum ada berita relevan saat ini')+
+    `<br><span style="font-size:12px;color:var(--muted)">Bias dihitung dari ${rel.length} berita relevan (gabungan forex+general+crypto).</span>`;
 }
 
 async function loadNews(){
@@ -206,7 +216,20 @@ async function loadNews(){
     allNews=await res.json();
     if(!Array.isArray(allNews)||!allNews.length){box.innerHTML='<div class="status">Tidak ada berita.</div>';return;}
     render();
+    loadBiasPool(); // ambil semua kategori utk bias (tak blokir tampilan)
   }catch(err){box.innerHTML=`<div class="status err">Error: ${err.message}</div>`;}
+}
+// Ambil forex+general+crypto sekaligus, gabung & dedup untuk perhitungan bias
+async function loadBiasPool(){
+  try{
+    const cats=['forex','general','crypto'];
+    const results=await Promise.all(cats.map(c=>
+      fetch(`https://finnhub.io/api/v1/news?category=${c}&token=${API_KEY}`)
+        .then(r=>r.ok?r.json():[]).catch(()=>[])));
+    const seen=new Set(); const merged=[];
+    results.flat().forEach(n=>{ const k=n.id||n.url||n.headline; if(k&&!seen.has(k)){seen.add(k);merged.push(n);} });
+    if(merged.length){ biasNews=merged; updateBias(); }
+  }catch(e){}
 }
 function render(){
   const q=document.getElementById('search').value.toLowerCase();
@@ -269,20 +292,56 @@ function ema(values, period){const k=2/(period+1);const out=[];let prev;
 
 let chart, candleSeries, ema20Series, ema50Series;
 let ws, wsCoin=null, lastCandles=[];
+let HL_COINS=[]; // daftar coin perp Hyperliquid utk validasi search
+
+async function loadCoinList(){
+  try{
+    const r=await fetch(HL_REST,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'meta'})});
+    const d=await r.json();
+    HL_COINS=(d.universe||[]).map(u=>u.name.toUpperCase());
+  }catch(e){ HL_COINS=[]; }
+}
+
+async function doCoinSearch(){
+  const q=document.getElementById('coinSearch').value.trim().toUpperCase();
+  if(!q) return;
+  // validasi ke daftar coin; kalau daftar kosong, tetap coba langsung
+  if(HL_COINS.length && !HL_COINS.includes(q)){
+    const near=HL_COINS.filter(c=>c.includes(q)).slice(0,6);
+    document.getElementById('techNote').textContent=
+      `Coin "${q}" tak ditemukan di Hyperliquid.`+(near.length?` Mirip: ${near.join(', ')}`:'');
+    if(!near.length) return;
+  }
+  searchCoin=q; curInst=null; // mode search
+  document.getElementById('chartSym').textContent=`(${q} · ${curTf})`;
+  buildTabs();
+  closeWs();
+  if(!chart) initChart();
+  try{
+    const {candles,coin}=await fetchCandlesResolved(q);
+    lastCandles=candles; candleSeries.setData(candles); drawEma(candles);
+    centerChart(); techBias(candles.map(c=>c.close)); openWs(coin);
+    document.getElementById('drivers').innerHTML=`<b>🔎 ${q}</b> — crypto Hyperliquid. Bias berita tidak tersedia untuk hasil pencarian, hanya bias teknikal EMA.`;
+    document.getElementById('biasLabel').textContent='—'; document.getElementById('biasLabel').className='bias neu';
+  }catch(err){ document.getElementById('techNote').textContent='Chart: '+err.message; }
+}
 
 function initChart(){
   const el=document.getElementById('chart'); el.innerHTML='';
   chart=LightweightCharts.createChart(el,{
-    layout:{background:{color:'#0d1117'},textColor:'#8b949e'},
-    grid:{vertLines:{color:'#21262d'},horzLines:{color:'#21262d'}},
-    timeScale:{timeVisible:true,borderColor:'#30363d'},
-    rightPriceScale:{borderColor:'#30363d'}, crosshair:{mode:0}, autoSize:true,
+    layout:{background:{color:'#0d1117'},textColor:'#c9d1d9',fontSize:12},
+    grid:{vertLines:{color:'#1c2128'},horzLines:{color:'#1c2128'}},
+    timeScale:{timeVisible:true,borderColor:'#30363d',rightOffset:6,barSpacing:9},
+    rightPriceScale:{borderColor:'#30363d',scaleMargins:{top:0.1,bottom:0.1}},
+    crosshair:{mode:1,vertLine:{color:'#8b949e',labelBackgroundColor:'#30363d'},horzLine:{color:'#8b949e',labelBackgroundColor:'#30363d'}},
+    autoSize:true,
   });
   candleSeries=chart.addSeries(LightweightCharts.CandlestickSeries,{
-    upColor:'#3fb950',downColor:'#f85149',wickUpColor:'#3fb950',wickDownColor:'#f85149',borderVisible:false});
-  ema20Series=chart.addSeries(LightweightCharts.LineSeries,{color:'#f0b90b',lineWidth:2,priceLineVisible:false});
-  ema50Series=chart.addSeries(LightweightCharts.LineSeries,{color:'#58a6ff',lineWidth:2,priceLineVisible:false});
+    upColor:'#26a69a',downColor:'#ef5350',wickUpColor:'#26a69a',wickDownColor:'#ef5350',borderVisible:false});
+  ema20Series=chart.addSeries(LightweightCharts.LineSeries,{color:'#f0b90b',lineWidth:2,priceLineVisible:false,lastValueVisible:false});
+  ema50Series=chart.addSeries(LightweightCharts.LineSeries,{color:'#58a6ff',lineWidth:2,priceLineVisible:false,lastValueVisible:false});
 }
+function centerChart(){ try{ chart.timeScale().fitContent(); chart.timeScale().scrollToRealTime(); }catch(e){} }
 
 async function hlCandles(coin){
   const intervalMs={'15m':9e5,'1h':36e5,'4h':144e5,'1d':864e5}[curTf];
@@ -305,7 +364,8 @@ async function fetchCandlesResolved(coinKey){
 }
 
 async function loadChart(){
-  const cfg=INSTRUMENTS[curInst];
+  searchCoin=null;
+  const cfg=INSTRUMENTS[curInst]; if(!cfg) return;
   document.getElementById('chartSym').textContent=`(${cfg.coin} · ${curTf})`;
   if(!chart) initChart();
   closeWs();
@@ -314,9 +374,9 @@ async function loadChart(){
     lastCandles=candles;
     candleSeries.setData(candles);
     drawEma(candles);
-    chart.timeScale().fitContent();
+    centerChart();
     techBias(candles.map(c=>c.close));
-    openWs(coin);  // live update pakai simbol yang berhasil
+    openWs(coin);
   }catch(err){
     candleSeries.setData([]); ema20Series.setData([]); ema50Series.setData([]);
     const t=document.getElementById('techBias'); t.className='sent neu'; t.textContent='—';
@@ -370,8 +430,35 @@ function techBias(closes){
   document.getElementById('techNote').textContent=note;
 }
 
+/* ---------- Auto-refresh ---------- */
+const REFRESH_MS=5*60*1000;
+let autoOn=true, nextRefresh=Date.now()+REFRESH_MS, refTimer, cdTimer;
+function refreshAll(){
+  loadNews();
+  loadCalendar();
+  if(searchCoin) doCoinSearch(); else loadChart();
+  nextRefresh=Date.now()+REFRESH_MS;
+}
+function tickCountdown(){
+  const el=document.getElementById('countdown'); if(!el) return;
+  if(!autoOn){ el.textContent='(mati)'; return; }
+  const s=Math.max(0,Math.round((nextRefresh-Date.now())/1000));
+  el.textContent=`(${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')})`;
+}
+function startAuto(){
+  clearInterval(refTimer); clearInterval(cdTimer);
+  nextRefresh=Date.now()+REFRESH_MS;
+  refTimer=setInterval(()=>{ if(autoOn) refreshAll(); },REFRESH_MS);
+  cdTimer=setInterval(tickCountdown,1000);
+}
+function toggleAuto(){
+  autoOn=document.getElementById('autoChk').checked;
+  if(autoOn) nextRefresh=Date.now()+REFRESH_MS;
+  tickCountdown();
+}
+
 buildTabs();
-window.addEventListener('DOMContentLoaded',()=>{ loadNews();loadCalendar();loadChart(); });
+window.addEventListener('DOMContentLoaded',()=>{ loadCoinList(); loadNews();loadCalendar();loadChart(); startAuto(); });
 </script>
 </body>
 </html>
