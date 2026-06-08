@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Forex News Dashboard</title>
+<script src="https://unpkg.com/lightweight-charts@5.2.0/dist/lightweight-charts.standalone.production.js"></script>
 <style>
   :root{--bg:#0d1117;--card:#161b22;--border:#30363d;--text:#e6edf3;--muted:#8b949e;--accent:#f0b90b;--green:#3fb950;--red:#f85149;--blue:#58a6ff;}
   *{box-sizing:border-box;margin:0;padding:0}
@@ -71,6 +72,27 @@
   </div>
 
   <div class="panel">
+    <h2>📉 Candlestick + EMA <span id="chartSym" style="color:var(--muted);font-weight:400;font-size:13px"></span></h2>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px" id="tfTabs">
+      <span class="inst tf active" data-tf="15m">15m</span>
+      <span class="inst tf" data-tf="1h">1H</span>
+      <span class="inst tf" data-tf="4h">4H</span>
+      <span class="inst tf" data-tf="1d">1D</span>
+    </div>
+    <div id="chart" style="width:100%;height:360px;border-radius:8px;overflow:hidden"></div>
+    <div style="margin:8px 0;font-size:12px;color:var(--muted)">
+      <span id="liveStatus">●</span> Data: Hyperliquid (gratis, tanpa key). Simbol GOLD/USA500/CL/SILVER = HIP-3 perp.
+      Kalau chart kosong, simbol/dex mungkin beda — ubah di <code>COIN_ALIASES</code>.
+    </div>
+    <div class="gauge-wrap" style="margin-top:12px">
+      <span style="font-size:13px;color:var(--muted)">Bias Teknikal (EMA):</span>
+      <span class="sent neu" id="techBias" style="font-size:14px">—</span>
+      <span style="font-size:12px;color:var(--muted)" id="techNote"></span>
+    </div>
+    <div style="font-size:12px;color:var(--muted);margin-top:6px">EMA20 (kuning) & EMA50 (biru). Sumber: Hyperliquid REST (historis) + WebSocket (live). Harga GOLD = perp, bukan XAUUSD spot broker.</div>
+  </div>
+
+  <div class="panel">
     <h2>🗓️ Jadwal Rilis Berita Penting (mendatang)</h2>
     <div id="calendar"><div class="status">Memuat jadwal...</div></div>
     <div style="font-size:12px;color:var(--muted);margin-top:8px" id="calNote"></div>
@@ -90,21 +112,24 @@
 
 <script>
 const API_KEY='d8j1dt1r01qin2u15ac0d8j1dt1r01qin2u15acg';
-let category='forex', allNews=[], curInst='XAU';
+let category='forex', allNews=[], curInst='XAU', curTf='15m';
 
 /* Definisi instrumen: keyword identifikasi + arah safe-haven */
 const INSTRUMENTS={
-  XAU:{label:'🥇 XAU/Gold', match:['gold','xau','xauusd','bullion','precious metal'], havenFlip:true,
+  XAU:{label:'🥇 GOLD', coin:'GOLD', match:['gold','xau','xauusd','bullion','precious metal'], havenFlip:true,
        note:'Gold sering naik saat risk-off / USD lemah / dovish Fed.'},
-  BTC:{label:'₿ BTC', match:['bitcoin','btc','crypto','ethereum','digital asset'], havenFlip:false,
+  BTC:{label:'₿ BTC', coin:'BTC', match:['bitcoin','btc','crypto','ethereum','digital asset'], havenFlip:false,
        note:'BTC cenderung risk-on; naik saat sentimen positif / likuiditas longgar.'},
-  NDX:{label:'📊 Nasdaq', match:['nasdaq','tech stock','equities','s&p','stock market','wall street','ndx'], havenFlip:false,
+  NDX:{label:'📊 USA500', coin:'USA500', match:['nasdaq','tech stock','equities','s&p','stock market','wall street','ndx','sp500'], havenFlip:false,
        note:'Indeks saham risk-on; turun saat hawkish/yield naik, naik saat dovish.'},
-  USD:{label:'💵 USD/DXY', match:['dollar','usd','dxy','greenback','federal reserve','fed'], havenFlip:false,
-       note:'USD menguat saat hawkish Fed / risk-off / data AS kuat.'},
-  EUR:{label:'🇪🇺 EUR', match:['euro','eur','eurusd','ecb','eurozone'], havenFlip:false,
-       note:'EUR dipengaruhi ECB & data zona euro relatif terhadap USD.'},
+  OIL:{label:'🛢️ Oil (CL)', coin:'CL', match:['oil','crude','wti','brent','opec','energy'], havenFlip:false,
+       note:'Minyak dipengaruhi pasokan OPEC, permintaan global & geopolitik.'},
+  SIL:{label:'🥈 SILVER', coin:'SILVER', match:['silver','xag','precious metal'], havenFlip:true,
+       note:'Perak: logam mulia + industri; gerak mirip emas tapi lebih volatil.'},
 };
+// Daftar simbol historis Hyperliquid (HIP-3 butuh prefix dex:ticker). Sesuaikan jika nama dex berbeda.
+const COIN_ALIASES={ GOLD:['GOLD','xyz:GOLD'], USA500:['USA500','cash:USA500'], CL:['CL','xyz:CL'], SILVER:['SILVER','xyz:SILVER'], BTC:['BTC'] };
+const HL_REST='https://api.hyperliquid.xyz/info';
 
 const POS=['surge','rally','gain','rise','jump','bullish','strong','boost','climb','soar','beat','record high','optimism','upbeat','demand','inflow'];
 const NEG=['fall','drop','plunge','decline','bearish','weak','slump','crash','fear','loss','cut','recession','sell-off','selloff','tumble','slowdown','outflow','miss'];
@@ -142,7 +167,10 @@ function buildTabs(){
     .map(([k,v])=>`<span class="inst ${k===curInst?'active':''}" data-inst="${k}">${v.label}</span>`).join('');
 }
 document.addEventListener('click',e=>{
-  if(e.target.classList.contains('inst')){ curInst=e.target.dataset.inst; buildTabs(); updateBias(); }
+  if(e.target.classList.contains('tf')){
+    document.querySelectorAll('.tf').forEach(c=>c.classList.remove('active'));
+    e.target.classList.add('active'); curTf=e.target.dataset.tf; loadChart();
+  } else if(e.target.classList.contains('inst')){ curInst=e.target.dataset.inst; buildTabs(); updateBias(); loadChart(); }
   if(e.target.classList.contains('chip')){
     document.querySelectorAll('.chip').forEach(c=>c.classList.remove('active'));
     e.target.classList.add('active'); category=e.target.dataset.cat; loadNews();
@@ -235,8 +263,115 @@ function renderCal(events){const box=document.getElementById('calendar');
     const it=ic==='high'?'HIGH':ic==='med'?'MED':'LOW';
     return `<div class="cal-item"><span class="cal-time">${when}</span><span class="cal-name">${e.name}</span><span class="imp ${ic}">${it}</span><span class="cd">${cd}</span></div>`;}).join('');}
 
+/* ---------- Chart: Lightweight Charts + Hyperliquid ---------- */
+function ema(values, period){const k=2/(period+1);const out=[];let prev;
+  values.forEach((v,i)=>{prev=i===0?v:v*k+prev*(1-k);out.push(prev);});return out;}
+
+let chart, candleSeries, ema20Series, ema50Series;
+let ws, wsCoin=null, lastCandles=[];
+
+function initChart(){
+  const el=document.getElementById('chart'); el.innerHTML='';
+  chart=LightweightCharts.createChart(el,{
+    layout:{background:{color:'#0d1117'},textColor:'#8b949e'},
+    grid:{vertLines:{color:'#21262d'},horzLines:{color:'#21262d'}},
+    timeScale:{timeVisible:true,borderColor:'#30363d'},
+    rightPriceScale:{borderColor:'#30363d'}, crosshair:{mode:0}, autoSize:true,
+  });
+  candleSeries=chart.addSeries(LightweightCharts.CandlestickSeries,{
+    upColor:'#3fb950',downColor:'#f85149',wickUpColor:'#3fb950',wickDownColor:'#f85149',borderVisible:false});
+  ema20Series=chart.addSeries(LightweightCharts.LineSeries,{color:'#f0b90b',lineWidth:2,priceLineVisible:false});
+  ema50Series=chart.addSeries(LightweightCharts.LineSeries,{color:'#58a6ff',lineWidth:2,priceLineVisible:false});
+}
+
+async function hlCandles(coin){
+  const intervalMs={'15m':9e5,'1h':36e5,'4h':144e5,'1d':864e5}[curTf];
+  const end=Date.now(), start=end-intervalMs*200;
+  const r=await fetch(HL_REST,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({type:'candleSnapshot',req:{coin,interval:curTf,startTime:start,endTime:end}})});
+  if(!r.ok) throw new Error('HTTP '+r.status);
+  const d=await r.json();
+  if(!Array.isArray(d)||!d.length) throw new Error('kosong');
+  return d.map(c=>({time:Math.floor(c.t/1000),open:+c.o,high:+c.h,low:+c.l,close:+c.c}));
+}
+// coba beberapa alias simbol sampai ada yang berisi
+async function fetchCandlesResolved(coinKey){
+  const aliases=COIN_ALIASES[coinKey]||[coinKey];
+  let lastErr;
+  for(const a of aliases){
+    try{ const c=await hlCandles(a); return {candles:c, coin:a}; }catch(e){ lastErr=e; }
+  }
+  throw lastErr||new Error('tidak ada data');
+}
+
+async function loadChart(){
+  const cfg=INSTRUMENTS[curInst];
+  document.getElementById('chartSym').textContent=`(${cfg.coin} · ${curTf})`;
+  if(!chart) initChart();
+  closeWs();
+  try{
+    const {candles,coin}=await fetchCandlesResolved(cfg.coin);
+    lastCandles=candles;
+    candleSeries.setData(candles);
+    drawEma(candles);
+    chart.timeScale().fitContent();
+    techBias(candles.map(c=>c.close));
+    openWs(coin);  // live update pakai simbol yang berhasil
+  }catch(err){
+    candleSeries.setData([]); ema20Series.setData([]); ema50Series.setData([]);
+    const t=document.getElementById('techBias'); t.className='sent neu'; t.textContent='—';
+    document.getElementById('techNote').textContent='Chart: '+err.message+' — coba ubah simbol di COIN_ALIASES.';
+  }
+}
+function drawEma(candles){
+  const closes=candles.map(c=>c.close);
+  const e20=ema(closes,20), e50=ema(closes,50);
+  ema20Series.setData(candles.map((c,i)=>({time:c.time,value:e20[i]})));
+  ema50Series.setData(candles.map((c,i)=>({time:c.time,value:e50[i]})));
+}
+
+/* WebSocket live candle */
+function openWs(coin){
+  try{
+    ws=new WebSocket('wss://api.hyperliquid.xyz/ws'); wsCoin=coin;
+    ws.onopen=()=>{ setLive(true);
+      ws.send(JSON.stringify({method:'subscribe',subscription:{type:'candle',coin,interval:curTf}})); };
+    ws.onmessage=ev=>{
+      const m=JSON.parse(ev.data);
+      if(m.channel==='candle' && m.data){
+        const c=m.data; const bar={time:Math.floor(c.t/1000),open:+c.o,high:+c.h,low:+c.l,close:+c.c};
+        candleSeries.update(bar);
+        // perbarui candle terakhir di array & redraw EMA ringan
+        const last=lastCandles[lastCandles.length-1];
+        if(last && last.time===bar.time) lastCandles[lastCandles.length-1]=bar;
+        else lastCandles.push(bar);
+        drawEma(lastCandles);
+        techBias(lastCandles.map(x=>x.close));
+      }
+    };
+    ws.onclose=()=>setLive(false);
+    ws.onerror=()=>setLive(false);
+  }catch(e){ setLive(false); }
+}
+function closeWs(){ if(ws){ try{ws.close();}catch(e){} ws=null; } }
+function setLive(on){ const s=document.getElementById('liveStatus'); if(s){s.style.color=on?'#3fb950':'#8b949e'; s.title=on?'Live':'Offline';} }
+
+function techBias(closes){
+  const e20=ema(closes,20), e50=ema(closes,50);
+  const n=closes.length-1, price=closes[n], a=e20[n], b=e50[n];
+  let bias,note;
+  if(price>a && a>b){bias='pos';note='Harga > EMA20 > EMA50 → uptrend.';}
+  else if(price<a && a<b){bias='neg';note='Harga < EMA20 < EMA50 → downtrend.';}
+  else if(price>a && a<b){bias='pos';note='Harga di atas EMA20, EMA mulai cross → potensi bullish.';}
+  else if(price<a && a>b){bias='neg';note='Harga di bawah EMA20, EMA mulai cross → potensi bearish.';}
+  else {bias='neu';note='Harga di antara EMA → ranging/tak jelas.';}
+  const t=document.getElementById('techBias');
+  t.className='sent '+bias; t.textContent={pos:'Bullish',neg:'Bearish',neu:'Netral'}[bias];
+  document.getElementById('techNote').textContent=note;
+}
+
 buildTabs();
-window.addEventListener('DOMContentLoaded',()=>{loadNews();loadCalendar();});
+window.addEventListener('DOMContentLoaded',()=>{ loadNews();loadCalendar();loadChart(); });
 </script>
 </body>
 </html>
